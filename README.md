@@ -2,6 +2,8 @@
 
 Aplicação serverless na **Azure** que coleta comentários de clientes, avalia o sentimento com o **Azure AI Language (Cognitive Services)**, passa o resultado por uma **Storage Queue**, grava em um **Azure SQL Database (SQL Server)** e expõe os totais por uma **HTTP function**.
 
+> Todos os recursos usam o **plano gratuito** da Azure (Language `F0`, SQL Database na oferta gratuita, Functions no plano de consumo). A Storage Account (`Standard_LRS`) não tem plano gratuito, mas o custo de uma fila é de centavos e cabe nos créditos do Azure for Students.
+>
 > Todos os comandos abaixo estão no formato **Windows / PowerShell**. Para executar no Linux/macOS, veja a seção [Equivalentes em bash](#equivalentes-em-bash).
 
 ## Arquitetura
@@ -142,7 +144,7 @@ az cognitiveservices account create `
   --resource-group $RESOURCE_GROUP `
   --location $LOCATION `
   --kind TextAnalytics `
-  --sku S `
+  --sku F0 `
   --yes
 
 # Endpoint e chave
@@ -161,7 +163,8 @@ $LANGUAGE_KEY = az cognitiveservices account keys list `
 Write-Host $LANGUAGE_ENDPOINT
 ```
 
-> O SKU gratuito `F0` permite ~5.000 textos/mês. Com uma chamada a cada 10 s (8.640/dia), ele esgota em menos de um dia; por isso foi usado `S`. Para usar `F0`, trocar `--sku S` por `--sku F0` (só é permitido um recurso F0 por assinatura).
+> **Plano gratuito (`F0`)**: até 5.000 textos/mês e só um recurso `F0` do tipo `TextAnalytics` por assinatura (se já existir um, reutilize-o ou remova-o antes).
+> Com uma chamada a cada 10 s (8.640/dia) a cota acaba em ~14 h e a API passa a responder `429`. Por isso, depois de testar/entregar, pare a Function App (passo 11).
 
 ### 5. Azure SQL Database (SQL Server)
 
@@ -192,14 +195,30 @@ az sql server firewall-rule create `
   --start-ip-address $MEU_IP `
   --end-ip-address $MEU_IP
 
+# Banco na oferta gratuita (serverless, 100.000 vCore-segundos + 32 GB por mês)
 az sql db create `
   --resource-group $RESOURCE_GROUP `
   --server $SQL_SERVER `
   --name $SQL_DB `
-  --service-objective Basic
+  --edition GeneralPurpose `
+  --compute-model Serverless `
+  --family Gen5 `
+  --capacity 2 `
+  --use-free-limit `
+  --free-limit-exhaustion-behavior AutoPause
 
 az sql db list --resource-group $RESOURCE_GROUP --server $SQL_SERVER --output table
+
+# Confirma que o banco está na oferta gratuita (deve retornar true)
+az sql db show `
+  --resource-group $RESOURCE_GROUP `
+  --server $SQL_SERVER `
+  --name $SQL_DB `
+  --query useFreeLimit `
+  --output tsv
 ```
+
+> Com `AutoPause`, se a cota gratuita do mês acabar o banco é pausado até o mês seguinte, sem gerar cobrança. O banco serverless também pausa sozinho quando fica sem uso; a primeira conexão depois disso pode levar cerca de 1 minuto (as funções tentam de novo automaticamente).
 
 Criar a tabela `dbo.Sentimentos` (script em `sql/schema.sql`):
 
@@ -236,7 +255,7 @@ az storage queue create `
 az storage queue list --connection-string $AZURE_STORAGE_CONNECTION_STRING --output table
 ```
 
-### 7. Function App (plano de consumo, Node.js)
+### 7. Function App (plano de consumo – gratuito até 1 milhão de execuções/mês)
 
 ```powershell
 az functionapp create `
