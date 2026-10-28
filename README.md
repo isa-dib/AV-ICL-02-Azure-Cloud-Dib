@@ -2,6 +2,8 @@
 
 Aplicação serverless na **Azure** que coleta comentários de clientes, avalia o sentimento com o **Azure AI Language (Cognitive Services)**, passa o resultado por uma **Storage Queue**, grava em um **Azure SQL Database (SQL Server)** e expõe os totais por uma **HTTP function**.
 
+> Roteiro feito para a assinatura **Azure for Students** (US$ 100 de crédito): só usa serviços disponíveis nela e só cria recursos nas regiões liberadas pela política da conta.
+>
 > Todos os recursos usam o **plano gratuito** da Azure (Language `F0`, SQL Database na oferta gratuita, Functions no plano de consumo). A Storage Account (`Standard_LRS`) não tem plano gratuito, mas o custo de uma fila é de centavos e cabe nos créditos do Azure for Students.
 >
 > Todos os comandos abaixo estão no formato **Windows / PowerShell**. Para executar no Linux/macOS, veja a seção [Equivalentes em bash](#equivalentes-em-bash).
@@ -87,24 +89,33 @@ func --version
 sqlcmd --version
 ```
 
-### 1. Login e verificação da conta
+### 1. Login e verificação da conta Azure for Students
 
 ```powershell
 az login
-az account show --output table
 
-# Regiões permitidas pela política da conta (Azure for Students)
-az policy assignment list --query "[].parameters.listOfAllowedLocations.value[]" -o tsv
+# Deve aparecer "Azure for Students" na coluna Name
+az account show --query "{Assinatura:name, Id:id, Estado:state}" --output table
+
+# Políticas aplicadas à conta de estudante
+az policy assignment list --query "[].displayName" --output table
+
+# Regiões em que a conta de estudante pode criar recursos (normalmente 5)
+$REGIOES = az policy assignment list --query "[].parameters.listOfAllowedLocations.value[]" -o tsv
+$REGIOES
 ```
+
+> A assinatura **Azure for Students** só aceita recursos nas regiões listadas acima; em qualquer outra a criação falha com `RequestDisallowedByAzure`. Por isso todos os comandos usam a variável `$LOCATION`, preenchida a partir dessa lista.
 
 ### 2. Variáveis de ambiente (PowerShell)
 
-> Ajustar `$LOCATION` para uma região da lista acima. As variáveis valem apenas para a janela do PowerShell aberta.
+> `$LOCATION` recebe a primeira região permitida; para usar outra da lista, troque por ex. `$LOCATION = "eastus2"`. As variáveis valem apenas para a janela do PowerShell aberta.
 
 ```powershell
 $env:AZURE_CORE_ONLY_SHOW_ERRORS = "true"
 
-$LOCATION          = "brazilsouth"
+$LOCATION          = ($REGIOES | Select-Object -First 1)
+$SQL_LOCATION      = $LOCATION   # ver observação no passo 5
 $RESOURCE_GROUP    = "rg-av-icl-02"
 $SUFIXO            = Get-Random -Minimum 10000 -Maximum 99999
 
@@ -118,7 +129,7 @@ $SQL_PASSWORD      = "SenhaForte#2026"
 $QUEUE_NAME        = "fila-sentimentos"
 $COMENTARIOS_URL   = "https://backend-n75y.onrender.com/comentarios"
 
-Write-Host "Function App: $FUNCTION_APP_NAME | SQL Server: $SQL_SERVER | Storage: $STORAGE_NAME"
+Write-Host "Região: $LOCATION | Function App: $FUNCTION_APP_NAME | SQL Server: $SQL_SERVER | Storage: $STORAGE_NAME"
 ```
 
 ### 3. Registrar os provedores e criar o grupo de recursos
@@ -163,21 +174,33 @@ $LANGUAGE_KEY = az cognitiveservices account keys list `
 Write-Host $LANGUAGE_ENDPOINT
 ```
 
+> Se o comando `list-skus` acima não mostrar `F0` para `$LOCATION`, use outra região da lista `$REGIOES` em `--location` (o recurso de Language pode ficar em região diferente das funções).
+>
 > **Plano gratuito (`F0`)**: até 5.000 textos/mês e só um recurso `F0` do tipo `TextAnalytics` por assinatura (se já existir um, reutilize-o ou remova-o antes).
 > Com uma chamada a cada 10 s (8.640/dia) a cota acaba em ~14 h e a API passa a responder `429`. Por isso, depois de testar/entregar, pare a Function App (passo 11).
 
 ### 5. Azure SQL Database (SQL Server)
 
 ```powershell
-az sql db list-editions --location $LOCATION --output table
+az sql db list-editions --location $SQL_LOCATION --output table
 
 az sql server create `
   --name $SQL_SERVER `
   --resource-group $RESOURCE_GROUP `
-  --location $LOCATION `
+  --location $SQL_LOCATION `
   --admin-user $SQL_ADMIN `
   --admin-password $SQL_PASSWORD
+```
 
+> **Conta de estudante:** em algumas regiões o Azure for Students não deixa criar SQL Server (erro `RegionDoesNotAllowProvisioning` / *"Provisioning is restricted in this region"*). Nesse caso, escolha outra região da lista `$REGIOES` só para o banco e repita o comando acima:
+>
+> ```powershell
+> $SQL_LOCATION = "westus2"   # outra região da lista $REGIOES
+> ```
+>
+> A Function App acessa o banco pela internet (porta 1433), então o banco pode ficar em região diferente das funções.
+
+```powershell
 # Permite o acesso de serviços da Azure (a Function App)
 az sql server firewall-rule create `
   --resource-group $RESOURCE_GROUP `
@@ -218,6 +241,12 @@ az sql db show `
   --output tsv
 ```
 
+> Se a conta de estudante recusar a oferta gratuita (`--use-free-limit`), crie o banco no tier `Basic` (cerca de US$ 5/mês, descontado dos créditos de estudante):
+>
+> ```powershell
+> az sql db create --resource-group $RESOURCE_GROUP --server $SQL_SERVER --name $SQL_DB --service-objective Basic
+> ```
+>
 > Com `AutoPause`, se a cota gratuita do mês acabar o banco é pausado até o mês seguinte, sem gerar cobrança. O banco serverless também pausa sozinho quando fica sem uso; a primeira conexão depois disso pode levar cerca de 1 minuto (as funções tentam de novo automaticamente).
 
 Criar a tabela `dbo.Sentimentos` (script em `sql/schema.sql`):
@@ -379,6 +408,16 @@ az functionapp start --name $FUNCTION_APP_NAME --resource-group $RESOURCE_GROUP
 # Remove TODOS os recursos do grupo
 az group delete --name $RESOURCE_GROUP --yes --no-wait
 ```
+
+### Problemas comuns na conta Azure for Students
+
+| Erro | Causa | Solução |
+|---|---|---|
+| `RequestDisallowedByAzure` / `RequestDisallowedByPolicy` | Região fora da lista permitida | Usar uma região de `$REGIOES` (passo 1) |
+| `RegionDoesNotAllowProvisioning` ao criar o SQL Server | Região sem SQL para estudantes | Trocar `$SQL_LOCATION` por outra região de `$REGIOES` (passo 5) |
+| `InsufficientQuota` / `CanNotCreateMultipleFreeAccounts` no Language | Já existe um recurso `F0` na assinatura | Reutilizar o existente (`az cognitiveservices account list -o table`) ou removê-lo |
+| `MissingSubscriptionRegistration` | Provedor não registrado | Repetir os comandos `az provider register` do passo 3 |
+| API de sentimento retorna `429` | Cota mensal do `F0` esgotada | Parar a Function App (passo 11) |
 
 ---
 
