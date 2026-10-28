@@ -1,0 +1,11 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "node",
+    "COMENTARIOS_URL": "https://backend-n75y.onrender.com/comentarios",
+    "LANGUAGE_ENDPOINT": "https://<seu-recurso-language>.cognitiveservices.azure.com/",
+    "LANGUAGE_KEY": "<chave-do-language>",
+    "SqlConnectionString": "Server=tcp:<seu-sql-server>.database.windows.net,1433;Initial Catalog=dbsentimentos;User ID=adminuser;Password=<senha>;Encrypt=True;"
+  }
+}

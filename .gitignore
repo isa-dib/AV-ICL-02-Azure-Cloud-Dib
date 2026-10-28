@@ -1,0 +1,9 @@
+node_modules/
+local.settings.json
+function.zip
+__azurite_db*
+__blobstorage__/
+__queuestorage__/
+data/
+.vscode/
+*.log
