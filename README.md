@@ -501,7 +501,7 @@ az group delete --name $RESOURCE_GROUP --yes --no-wait
 | `Cannot open server ... Client with IP address ... is not allowed` no `sqlcmd` | IP do Cloud Shell mudou | Atualizar a regra `AllowMyIP` (passo 5) |
 | `InsufficientQuota` / `CanNotCreateMultipleFreeAccounts` no Language | Já existe um recurso `F0` na assinatura | Reutilizar o existente (`az cognitiveservices account list -o table`) ou removê-lo |
 | `MissingSubscriptionRegistration` | Provedor não registrado | Repetir os comandos `az provider register` do passo 3 |
-| `404 (Not Found)` em `/api/sentimentos` | Nenhuma função carregada (pacote `.zip` sem `host.json` na raiz ou sem `node_modules`) | Ver [Diagnóstico do 404](#diagnóstico-do-404) |
+| `404 (Not Found)` em `/api/sentimentos` | Nenhuma função carregada (pacote `.zip` sem `host.json` na raiz, sem `node_modules`, ou pasta das funções diferente do `"main"` do `package.json`) | Ver [Diagnóstico do 404](#diagnóstico-do-404) |
 | API de sentimento retorna `429` | Cota mensal do `F0` esgotada | Parar a Function App (passo 11) |
 
 ### Diagnóstico do 404
@@ -513,10 +513,20 @@ az functionapp function list --resource-group $RESOURCE_GROUP --name $FUNCTION_A
 # 2. O pacote tem host.json e src/ na raiz e o node_modules/@azure?
 unzip -l function.zip | grep -E " host.json| package.json|src/functions/|node_modules/@azure/functions/package.json"
 
-# 3. Configurações de runtime
+# 3. O "main" do package.json aponta para a pasta que existe? (deve ser src/functions/*.js)
+#    Se a pasta tiver outro nome (ex.: src/function), o host sobe mas indexa 0 funções.
+grep '"main"' package.json
+ls src/functions/*.js
+
+# 4. Configurações de runtime (só os nomes dos settings obrigatórios, sem valores secretos)
 az functionapp config appsettings list --resource-group $RESOURCE_GROUP --name $FUNCTION_APP_NAME \
   --query "[?name=='FUNCTIONS_WORKER_RUNTIME' || name=='FUNCTIONS_EXTENSION_VERSION' || name=='WEBSITE_NODE_DEFAULT_VERSION'].{Nome:name,Valor:value}" --output table
+
+az functionapp config appsettings list --resource-group $RESOURCE_GROUP --name $FUNCTION_APP_NAME \
+  --query "[?contains('AzureWebJobsStorage SqlConnectionString LANGUAGE_ENDPOINT LANGUAGE_KEY WEBSITE_RUN_FROM_PACKAGE', name)].name" --output tsv
 ```
+
+> O Functions Core Tools 4.16+ precisa de **Node 22** para instalar via `npm i -g azure-functions-core-tools@4` (com Node 20 o `install.js` falha com `ERR_REQUIRE_ESM`). No Azure Cloud Shell `az`, `func` e o login já estão prontos.
 
 Se a lista do item 1 vier vazia, publicar de novo **de dentro da pasta do repositório** com o Functions Core Tools, que mostra as funções publicadas e as URLs no final:
 
