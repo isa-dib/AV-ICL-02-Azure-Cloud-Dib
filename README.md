@@ -1,62 +1,5 @@
 # AV-ICL-02-Azure – Análise de Sentimento de Comentários
 
-Aplicação serverless na **Azure** que coleta comentários de clientes, avalia o sentimento com o **Azure AI Language (Cognitive Services)**, passa o resultado por uma **Storage Queue**, grava em um **Azure SQL Database (SQL Server)** e expõe os totais por uma **HTTP function**.
-
-> Roteiro feito para a assinatura **Azure for Students** (US$ 100 de crédito): só usa serviços disponíveis nela e só cria recursos nas regiões liberadas pela política da conta.
->
-> Todos os recursos usam o **plano gratuito** da Azure (Language `F0`, SQL Database na oferta gratuita, Functions no plano de consumo). A Storage Account (`Standard_LRS`) não tem plano gratuito, mas o custo de uma fila é de centavos e cabe nos créditos do Azure for Students.
->
-> Todos os comandos estão em **bash** e foram executados no **Azure Cloud Shell (Bash)** – portal da Azure, ícone `>_` no topo. Também funcionam em qualquer terminal Linux/macOS/WSL com as ferramentas do passo 0.
-
-## Arquitetura
-
-```
- https://backend-n75y.onrender.com/comentarios
-        │  {"id":25,"comentario":"Tudo ocorreu conforme o esperado, excelente serviço."}
-        ▼
- ┌────────────────────┐   analyzeSentiment   ┌───────────────────────┐
- │ timerComentarios   │ ───────────────────► │ Azure AI Language     │
- │ (timer, 10 s)      │ ◄─────────────────── │ (TextAnalytics)       │
- └─────────┬──────────┘  positive/neutral/   └───────────────────────┘
-           │             negative
-           ▼ output binding (Storage Queue)
- ┌────────────────────┐
- │ fila-sentimentos   │  Azure Storage Queue
- └─────────┬──────────┘
-           ▼ queue trigger
- ┌────────────────────┐  output binding (SQL)   ┌──────────────────────┐
- │ filaSentimentos    │ ──────────────────────► │ Azure SQL            │
- │ (queue function)   │       INSERT            │ dbo.Sentimentos      │
- └────────────────────┘                         └──────────┬───────────┘
-                                                           │ input binding (SQL)
- ┌────────────────────┐   GET /api/sentimentos             │
- │ totaisSentimentos  │ ◄──────────────────────────────────┘
- │ (http function)    │ ──► { "positive": 10, "neutral": 3, "negative": 2 }
- └────────────────────┘
-```
-
-| Função | Tipo | Arquivo | O que faz |
-|---|---|---|---|
-| `timerComentarios` | Timer (`*/10 * * * * *`) | `src/functions/timerComentarios.js` | Consulta o end-point a cada 10 s, analisa o sentimento e envia o resultado para a fila |
-| `filaSentimentos` | Queue trigger | `src/functions/filaSentimentos.js` | Recebe o resultado da fila e insere na tabela `dbo.Sentimentos` |
-| `totaisSentimentos` | HTTP (GET) | `src/functions/totaisSentimentos.js` | Retorna `{ positive, neutral, negative }` com os totais do banco |
-
-Observação: a API de sentimento pode responder `mixed`. Como o enunciado pede apenas `positive`, `neutral` ou `negative`, nesse caso é usado o sentimento com maior *confidence score*.
-
-## Estrutura do repositório
-
-```
-av-icl-02-azure/
-├── host.json                       # configuração do Functions host + extension bundle (SQL/Queue)
-├── package.json
-├── local.settings.example.json     # modelo das configurações para execução local
-├── sql/
-│   └── schema.sql                  # criação da tabela dbo.Sentimentos
-└── src/functions/
-    ├── timerComentarios.js         # timer function
-    ├── filaSentimentos.js          # queue function
-    └── totaisSentimentos.js        # http function
-```
 
 ## End-point de entrega
 
@@ -80,16 +23,14 @@ node --version
 func --version
 ```
 
-> Em um Linux local, instalar antes: Azure CLI (`curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash`), Node.js LTS e o Functions Core Tools (`npm i -g azure-functions-core-tools@4`).
-
 Trazer o código do repositório (todos os comandos seguintes rodam dentro desta pasta):
 
 ```bash
-git clone https://github.com/<seu-usuario>/av-icl-02-azure.git
-cd av-icl-02-azure
+git clone https://github.com/isa-dib/av-icl-02-Azure-Cloud_Dib.git
+cd av-icl-02-azure-cloud-dib
 ```
 
-Instalar o `sqlcmd` (mesmo procedimento do material da disciplina):
+Instalar o `sqlcmd`:
 
 ```bash
 wget https://github.com/microsoft/go-sqlcmd/releases/download/v1.10.0/sqlcmd-linux-amd64.tar.bz2
@@ -99,29 +40,6 @@ tar -xvf sqlcmd-linux-amd64.tar.bz2
 ./sqlcmd --version
 ```
 
-> Os arquivos do `sqlcmd` (`sqlcmd`, `sqlcmd_debug`, `NOTICE.md` e o `.tar.bz2`) estão no `.gitignore` e não vão para o repositório nem para o pacote da função.
-
-### 1. Login e verificação da conta Azure for Students
-
-```bash
-az login   # no Cloud Shell o login já é automático
-
-# Deve aparecer "Azure for Students" em Assinatura
-az account show --query "{Assinatura:name, Id:id, Estado:state}" --output table
-
-# Políticas aplicadas à conta de estudante
-# (--disable-scope-strict-match inclui as políticas herdadas, onde fica a restrição de regiões)
-az policy assignment list --disable-scope-strict-match --query "[].displayName" --output table
-
-# Regiões em que a conta de estudante pode criar recursos (normalmente 5)
-REGIOES=$(az policy assignment list --disable-scope-strict-match \
-  --query "[].parameters.listOfAllowedLocations.value[]" -o tsv)
-echo "$REGIOES"
-```
-
-> A assinatura **Azure for Students** só aceita recursos nas regiões listadas acima; em qualquer outra a criação falha com `RequestDisallowedByAzure`.
->
-> Se `REGIOES` vier vazio, veja as regiões no portal: **Policy → Authoring → Assignments → "Allowed resource deployment regions" → Parameters**, e defina manualmente no passo 2 (`export LOCATION=eastus2`, por exemplo).
 
 ### 2. Variáveis de ambiente
 
@@ -544,6 +462,33 @@ Functions in func-sentimentos-XXXXX:
     timerComentarios - [timerTrigger]
     totaisSentimentos - [httpTrigger]
         Invoke url: https://func-sentimentos-XXXXX.azurewebsites.net/api/sentimentos
+```
+
+Se o `func azure functionapp publish` falhar com `Object reference not set to an instance of an object`, a autenticação básica do SCM está desativada no app (padrão em apps novos). Conferir e, em vez de reativá-la, publicar pelo `config-zip` (usa o token do `az login`):
+
+```bash
+# false = autenticação básica desativada
+az resource show --resource-group $RESOURCE_GROUP --name scm --namespace Microsoft.Web \
+  --resource-type basicPublishingCredentialsPolicies --parent sites/$FUNCTION_APP_NAME \
+  --query properties.allow --output tsv
+
+# Sem o comando zip (ex.: Git Bash no Windows), gerar o pacote com Python
+rm -f function.zip
+python -m zipfile -c function.zip host.json package.json package-lock.json src node_modules
+
+az functionapp deployment source config-zip \
+  --resource-group $RESOURCE_GROUP \
+  --name $FUNCTION_APP_NAME \
+  --src function.zip
+```
+
+Para conferir qual pacote está rodando e a estrutura de pastas publicada (via Kudu):
+
+```bash
+SCM=https://$FUNCTION_APP_NAME.scm.azurewebsites.net
+TOKEN=$(az account get-access-token --query accessToken --output tsv)
+curl -s -H "Authorization: Bearer $TOKEN" $SCM/api/vfs/data/SitePackages/packagename.txt; echo
+curl -s -H "Authorization: Bearer $TOKEN" $SCM/api/vfs/site/wwwroot/src/   # deve listar "functions"
 ```
 
 Se ainda assim não aparecerem funções, reiniciar e ver o erro no log:
